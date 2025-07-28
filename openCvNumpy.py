@@ -1,6 +1,13 @@
 import cv2
 import numpy as np
 from picamera2 import Picamera2, Preview
+import time
+
+
+def exitCleanup():
+    picam2.stop()
+    cv2.destroyAllWindows()
+    exit()
 
 picam2 = Picamera2()
 picam2.options["quality"] = 90
@@ -9,9 +16,16 @@ config = picam2.create_preview_configuration(main={"size": (800, 600)})
 picam2.start_preview(Preview.NULL, x=100, y=200, width=1280, height=720)
 picam2.configure(config)
 picam2.start()
+time.sleep(2)
 
 # Load background image (same resolution)
-bg = cv2.imread("800x600.jpg", cv2.IMREAD_UNCHANGED)
+try:
+    bg = cv2.imread("800x600.jpg", cv2.IMREAD_UNCHANGED)
+except:
+    print("ERROR: Could not find background image")
+    exitCleanup()
+
+
 hb, wb = bg.shape[:2]
 
 # Define green range and make mask
@@ -35,8 +49,8 @@ while True:
     output = cv2.add(fg, bk)
 
     cv2.imshow("Greenscreen Composite", output)
-    if cv2.waitKey(1) & 0xFF == ord("q"):
+    # Press the escape key with the Greenscreen Composite window in focus to end the program
+    if cv2.waitKey(1) == 27:
         break
 
-picam2.stop()
-cv2.destroyAllWindows()
+exitCleanup()
