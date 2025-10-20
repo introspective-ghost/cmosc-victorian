@@ -18,8 +18,6 @@ root.destroy()
 print("Screen Width: " + str(screenWidth))
 print("Screen Height: " + str(screenHeight))
 picam2 = Picamera2()
-picam2.options["quality"] = 90
-picam2.options["compress_level"] = 2
 config = picam2.create_preview_configuration(main={"size": (800, 600)})
 picam2.start_preview(Preview.NULL)
 picam2.configure(config)
@@ -37,12 +35,14 @@ except:
 hb, wb = bg.shape[:2]
 
 # Define green range and make mask
-lower = np.array([36, 50, 50])
-upper = np.array([90, 255, 255])
+lower = np.array([35, 75, 33])
+upper = np.array([85, 255, 255])
 
 # Create fullscreen window
 cv2.namedWindow("Greenscreen Composite", cv2.WINDOW_NORMAL)
 cv2.setWindowProperty("Greenscreen Composite", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+
 
 while True:
     frame_rgba = picam2.capture_array("main")  # BGR
@@ -50,9 +50,14 @@ while True:
     frame = frame_rgba[..., :3]
     # Grab the height and width from the frame
     h, w = frame.shape[:2]
-    
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, lower, upper)
+    # Clean up mask
+    kernel = np.ones((3,3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    mask = cv2.GaussianBlur(mask, (5,5), 0)
+    
     # Make sure the frame mask and frame background will be the same size
     if mask.shape != (h, w):
         mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
