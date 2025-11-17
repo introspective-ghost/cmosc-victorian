@@ -1,30 +1,38 @@
-import os
 import sys
 import time
 import signal
 import cv2
 import numpy as np
+import subprocess
+import libcamera
+
+from pathlib import Path
+from threading import Thread
+from gc import collect
 from datetime import datetime
-import gc
+from picamera2 import Picamera2
 from buttonHandler import ButtonHandler
+
 
 # --- CONFIG ---
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
 FRAME_WIDTH = 1420
 FRAME_HEIGHT = 1080
-BG_IMAGE_PATH = "backgroundImages/backdrop01.jpg"
+BACKUP_BG_IMG_PATH = Path("backgroundImages/backdrop01.jpg")
 MAX_CONSECUTIVE_ERRORS = 5
 WATCHDOG_DELAY = 3  # seconds before restart if unrecoverable
 BUTTON_PIN = 17  # GPIO pin for button
 
-cap = None
 canvas = None
 button = None
+pendingCapture = False
+debounceActive = False
 
 # --- LOGGING ---
-os.makedirs("logs", exist_ok=True)
-LOG_FILE = os.path.join("logs", f"greenscreen_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+logDir = Path("logs")
+logDir.mkdir(parents=True, exist_ok=True)
+LOG_FILE = logDir / f"greenscreen_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 def logMsg(level, msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{timestamp}] [{level}] {msg}"
@@ -36,10 +44,10 @@ def startupChecks():
     if FRAME_WIDTH > CANVAS_WIDTH or FRAME_HEIGHT > CANVAS_HEIGHT:
         logMsg("ERROR", f"Cropped frame size ({FRAME_WIDTH}x{FRAME_HEIGHT}) exceeds canvas size ({CANVAS_WIDTH}x{CANVAS_HEIGHT})")
         sys.exit(1)
-    if not os.path.exists(BG_IMAGE_PATH):
-        logMsg("ERROR", f"Background image not found: {BG_IMAGE_PATH}")
+    if not BACKUP_BG_IMG_PATH.exists():
+        logMsg("ERROR", f"Background image not found: {str(BACKUP_BG_IMG_PATH)}")
         sys.exit(1)
-    bgTest = cv2.imread(BG_IMAGE_PATH)
+    bgTest = cv2.imread(str(BACKUP_BG_IMG_PATH))
     if bgTest is None:
         logMsg("ERROR", "Failed to read background image")
         sys.exit(1)
@@ -52,9 +60,10 @@ def cleanupAndExit(signum=None, frame=None):
         return
     _cleanupDone = True
     try:
-        if cap is not None:
-            cap.release()
-            logMsg("INFO", "Camera stopped and closed cleanly")
+        picam2.stop_preview()
+        picam2.stop()
+        picam2.close()
+        logMsg("INFO", "Camera stopped and closed cleanly")
     except Exception as e:
         logMsg("WARNING", f"Camera cleanup issue: {e}")
 
@@ -73,7 +82,7 @@ def cleanupAndExit(signum=None, frame=None):
         logMsg("WARNING", f"GPIO cleanup issue: {e}")
 
     try:
-        gc.collect()
+        collect()
         logMsg("INFO", "Garbage collection completed")
     except Exception as e:
         logMsg("WARNING", f"Garbage collection issue: {e}")
@@ -191,21 +200,36 @@ def fitAndCropBackground(bgImg, frameWidth=FRAME_WIDTH, frameHeight=FRAME_HEIGHT
 
 # --- BUTTON HANDLER ---
 def onButtonPress(channel):
-    global pendingCapture, captureStartTime
+    global debounceActive, pendingCapture, captureStartTime
+    if debounceActive:
+        # ignore subsequent button presses until 3 seconds have passed
+        return
+    debounceActive = True
     logMsg("INFO", "Button pressed")
     pendingCapture = True
     captureStartTime = time.time()
+    # Set debounceActive back to false after 3 seconds
+    Thread(target=resetDebounce).start()
+    
+def resetDebounce():
+    global debounceActive
+    time.sleep(3)
+    debounceActive = False
 
 # --- MAIN  PROCESSING LOOP ---
 def runPipeline():
-    global cap, button, pendingCapture
-    errCnt = 0
-    bgImgOriginal = cv2.imread(BG_IMAGE_PATH)
+    global picam2, button, pendingCapture
+    rotate180 = libcamera.Transform(hflip=True, vflip=True)
     
+    # Will need to be modular for USB integration
+    backgroundFolderPath = Path("backgroundImages")
+    backgrounds = [f for f in backgroundFolderPath.iterdir() if f.is_file()]
     try:
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            raise RuntimeError("Failed to open camera")
+        picam2 = Picamera2()
+        config = picam2.create_preview_configuration(main={"size": (CANVAS_WIDTH, CANVAS_HEIGHT)},transform=rotate180)
+        picam2.configure(config)
+        picam2.start()
+        
         time.sleep(0.5)
         logMsg("INFO", "Camera started successfully")
 
@@ -222,11 +246,14 @@ def runPipeline():
         hHigh, sHigh, vHigh = 85, 255, 255
 
         errCnt = 0
+        pictureCnt = 0
+        backgroundCnt = 0
+        # select the last image in the list to be the first background so our first button press shows the 0th image in the array
+        bgImgOriginal = cv2.imread(str(backgrounds[len(backgrounds) - 1]))
         while True:
             try:
-                ret, frame = cap.read()
-                if not ret or frame is None or frame.size == 0:
-                    logMsg("ERROR", "Initial camera frame capture failed")
+                frame = picam2.capture_array()
+                if frame is None or frame.size == 0:
                     raise RuntimeError("Initial camera frame capture failed")
             except Exception as e:
                 errCnt += 1
@@ -237,6 +264,9 @@ def runPipeline():
                 continue
             errCnt = 0  # reset error count on success
             
+            # flip image over x-axis
+            frame = cv2.flip(frame, 0)
+            
             if cropX + FRAME_WIDTH > CANVAS_WIDTH or cropY + FRAME_HEIGHT > CANVAS_HEIGHT:
                 raise ValueError(f"Crop out of bounds: X={cropX}, Y={cropY}")
 
@@ -246,19 +276,20 @@ def runPipeline():
 
             # Zoom horizontally
             greenScreenImg = fitAndCropBackground(bgImgOriginal, FRAME_WIDTH, FRAME_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT, True)
-
+            
+            # fix color channels if needed
             greenScreenImg  = matchFrameColorChannelsToTarget(greenScreenImg, cropped.shape[2])
             cropped = matchFrameColorChannelsToTarget(cropped, greenScreenImg.shape[2])
             
+            # Create greenscreen mask
             hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, np.array([hLow, sLow, vLow]), np.array([hHigh, sHigh, vHigh]))
-
-            if cropped.shape[:2] != mask.shape[:2]:
-                print("[DEBUG] Resizing mask to match cropped frame")
-                mask = cv2.resize(mask, (cropped.shape[1], cropped.shape[0]), interpolation=cv2.INTER_NEAREST)
             
+            # Resize mask to match cropped frame
+            if cropped.shape[:2] != mask.shape[:2]:
+                mask = cv2.resize(mask, (cropped.shape[1], cropped.shape[0]), interpolation=cv2.INTER_NEAREST)
+            # Resize background to match frame
             if cropped.shape[:2] != greenScreenImg.shape[:2]:
-                print("[DEBUG] Resizing background to match cropped frame")
                 greenScreenImg = cv2.resize(greenScreenImg, (cropped.shape[1], cropped.shape[0]))
             
             maskInv = cv2.bitwise_not(mask)
@@ -271,10 +302,25 @@ def runPipeline():
             cv2.imshow("Greenscreen Composite", padded)
 
             if pendingCapture and (time.time() - captureStartTime >= 3):
-                grayCanvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
-                filename = f"logs/capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                if pictureCnt == 3:
+                    pictureCnt = 0
+                if backgroundCnt == len(backgrounds):
+                    backgroundCnt = 0
+                # create greyscale image
+                grayCanvas = cv2.cvtColor(padded, cv2.COLOR_BGR2GRAY)
+                filename = f"pics/pic{pictureCnt}.jpg"
                 cv2.imwrite(filename, grayCanvas)
-                print(f"Saved delayed capture: {filename}")
+                logMsg("INFO", f"Saved delayed capture: {filename}")
+                pictureCnt += 1
+                
+                # update the background image
+                bgImgOriginal = cv2.imread(str(backgrounds[backgroundCnt]))
+                backgroundCnt += 1
+                
+                # display image on screen for 2 seconds
+                cv2.imshow("Greenscreen Composite", grayCanvas)
+                cv2.waitKey(3000)
+                
                 pendingCapture = False  # reset
 
 
@@ -310,5 +356,5 @@ if __name__ == "__main__":
             time.sleep(WATCHDOG_DELAY)
             continue
         except Exception as e:
-            logMsg("WARNING", f"Watchdog caught Fatal error: {e}, restarting in {WATCHDOG_DELAY}s")
-            continue
+            logMsg("ERROR", f"Watchdog caught Fatal error: {e}, Exiting...")
+            break
