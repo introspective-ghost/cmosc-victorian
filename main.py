@@ -12,6 +12,7 @@ from gc import collect
 from datetime import datetime
 from picamera2 import Picamera2
 from buttonHandler import ButtonHandler
+from piFileTransfer import LocalNetworkPicTransfer
 
 
 # --- CONFIG ---
@@ -26,6 +27,7 @@ BUTTON_PIN = 17  # GPIO pin for button
 
 canvas = None
 button = None
+fileTransporter = None
 pendingCapture = False
 debounceActive = False
 
@@ -86,7 +88,13 @@ def cleanupAndExit(signum=None, frame=None):
         logMsg("INFO", "Garbage collection completed")
     except Exception as e:
         logMsg("WARNING", f"Garbage collection issue: {e}")
-
+    
+    try:
+        fileTransporter.close()
+        logMsg("INFO", "SSH connection closed")
+    except Exception as e:
+        logMsg("WARNING", "Problem closing ssh connection")
+        
     logMsg("INFO", "Program terminated via signal")
     sys.exit(0)
 
@@ -218,7 +226,7 @@ def resetDebounce():
 
 # --- MAIN  PROCESSING LOOP ---
 def runPipeline():
-    global picam2, button, pendingCapture
+    global picam2, button, pendingCapture, fileTransporter
     rotate180 = libcamera.Transform(hflip=True, vflip=True)
     
     # Will need to be modular for USB integration
@@ -237,6 +245,9 @@ def runPipeline():
         cv2.resizeWindow("Greenscreen Composite", 1080, 720)
         
         button = ButtonHandler(BUTTON_PIN, onButtonPress)
+        # victorian1 has a static IPv4 address
+        fileTransporter = LocalNetworkPicTransfer("192.168.1.20", "cmosc")
+        fileTransporter.connect()
         # 0-212
         cropX = 0
         # 0-751
@@ -308,9 +319,13 @@ def runPipeline():
                     backgroundCnt = 0
                 # create greyscale image
                 grayCanvas = cv2.cvtColor(padded, cv2.COLOR_BGR2GRAY)
-                filename = f"pics/pic{pictureCnt}.jpg"
-                cv2.imwrite(filename, grayCanvas)
-                logMsg("INFO", f"Saved delayed capture: {filename}")
+                filePath = "pics/"
+                fileName = f"pic{pictureCnt}.jpg"
+                cv2.imwrite(fileName, grayCanvas)
+                logMsg("INFO", f"Saved delayed capture: {fileName}")
+                if pictureCnt == 1 or pictureCnt == 2:
+                    fileTransporter.sendFile(filePath + fileName, f"~/{filePath}{fileName}")
+                    fileTransporter.close()
                 pictureCnt += 1
                 
                 # update the background image
