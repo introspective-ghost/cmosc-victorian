@@ -12,16 +12,13 @@ PIC2 = PIC_DIR / "pic2.jpg"
 
 last_mtime = {"pic1": None, "pic2": None}
 
-# Query monitor layout
-monitors = get_monitors()
-if len(monitors) < 2:
-    raise RuntimeError("Need at least two monitors connected!")
-
-monitor0, monitor1 = monitors[0], monitors[1]
+# Setup monitors
+monitor0 = {"width":1920,"height":1080,"x":0,"y":0}
+monitor1 = {"width":1920,"height":1080,"x":1920,"y":0}
 
 # Total desktop size (side-by-side layout assumed)
-total_width = monitor0.width + monitor1.width
-total_height = max(monitor0.height, monitor1.height)
+total_width = monitor0["width"] + monitor1["width"]
+total_height = max(monitor0["height"], monitor1["height"])
 
 # Initialize pygame
 pygame.init()
@@ -43,7 +40,7 @@ def show_image(img_path, monitor, offset_x):
         return
 
     # Scale to fit monitor
-    img = cv2.resize(img, (monitor.width, monitor.height))
+    img = cv2.resize(img, (monitor["width"], monitor["height"]))
     surface = cv2_to_pygame(img)
 
     # Draw at offset_x (left edge of that monitor)
@@ -62,7 +59,7 @@ def check_and_update():
     if PIC2.exists():
         mtime2 = PIC2.stat().st_mtime
         if last_mtime["pic2"] != mtime2:
-            show_image(PIC2, monitor1, monitor0.width)
+            show_image(PIC2, monitor1, monitor0["width"])
             last_mtime["pic2"] = mtime2
 
 def main():
@@ -73,7 +70,7 @@ def main():
 
     if PIC2.exists():
         last_mtime["pic2"] = PIC2.stat().st_mtime
-        show_image(PIC2, monitor1, monitor0.width)
+        show_image(PIC2, monitor1, monitor0["width"])
 
     print("Monitoring ~/pics for changes...")
     running = True
@@ -85,7 +82,7 @@ def main():
                 running = False
 
         check_and_update()
-        time.sleep(1)
+        time.sleep(.1)
 
     pygame.quit()
 
