@@ -18,9 +18,10 @@ from piFileTransfer import LocalNetworkPicTransfer
 # --- CONFIG ---
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
-FRAME_WIDTH = 1420
+FRAME_WIDTH = 1350
 FRAME_HEIGHT = 1080
-BACKUP_BG_IMG_PATH = Path("backgroundImages/backdrop01.jpg")
+PATH_TO_REPO = Path.home() / "cmosc-victorian"
+BACKUP_BG_IMG_PATH = PATH_TO_REPO / "backgroundImages/backdrop01.jpg"
 MAX_CONSECUTIVE_ERRORS = 5
 WATCHDOG_DELAY = 3  # seconds before restart if unrecoverable
 BUTTON_PIN = 17  # GPIO pin for button
@@ -32,7 +33,7 @@ pendingCapture = False
 debounceActive = False
 
 # --- LOGGING ---
-logDir = Path("logs")
+logDir = PATH_TO_REPO / "logs"
 logDir.mkdir(parents=True, exist_ok=True)
 LOG_FILE = logDir / f"greenscreen_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 def logMsg(level, msg):
@@ -249,12 +250,12 @@ def runPipeline():
         fileTransporter = LocalNetworkPicTransfer("192.168.1.20", "cmosc")
         fileTransporter.connect()
         # 0-212
-        cropX = 0
+        cropX = 212
         # 0-751
         cropY = 0
         # HSV thresholds for green screen
         hLow, sLow, vLow = 35, 40, 40
-        hHigh, sHigh, vHigh = 85, 255, 255
+        hHigh, sHigh, vHigh = 95, 255, 255
 
         errCnt = 0
         pictureCnt = 0
@@ -275,8 +276,8 @@ def runPipeline():
                 continue
             errCnt = 0  # reset error count on success
             
-            # flip image over x-axis
-            frame = cv2.flip(frame, 0)
+            # flip image over y-axis
+            frame = cv2.flip(frame, 1)
             
             if cropX + FRAME_WIDTH > CANVAS_WIDTH or cropY + FRAME_HEIGHT > CANVAS_HEIGHT:
                 raise ValueError(f"Crop out of bounds: X={cropX}, Y={cropY}")
@@ -295,6 +296,9 @@ def runPipeline():
             # Create greenscreen mask
             hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, np.array([hLow, sLow, vLow]), np.array([hHigh, sHigh, vHigh]))
+            kernel = np.ones((3,3), np.uint8)
+            mask = cv2.morphologyEx(mask,cv2.MORPH_OPEN, kernel) # remove small noise
+            mask = cv2.morphologyEx(mask,cv2.MORPH_CLOSE, kernel) # close small holes
             
             # Resize mask to match cropped frame
             if cropped.shape[:2] != mask.shape[:2]:
@@ -308,6 +312,7 @@ def runPipeline():
             fg = cv2.bitwise_and(cropped, cropped, mask=maskInv)
             bg = cv2.bitwise_and(greenScreenImg, greenScreenImg, mask=mask)
             composite = cv2.add(fg, bg)
+            composite = cv2.medianBlur(composite, 3)
 
             padded = centerInCanvas(composite, bgImgOriginal, CANVAS_WIDTH, CANVAS_HEIGHT)
             cv2.imshow("Greenscreen Composite", padded)
@@ -319,12 +324,12 @@ def runPipeline():
                     backgroundCnt = 0
                 # create greyscale image
                 grayCanvas = cv2.cvtColor(padded, cv2.COLOR_BGR2GRAY)
-                filePath = "pics/"
+                folderPath = PATH_TO_REPO / "pics/"
                 fileName = f"pic{pictureCnt}.jpg"
-                cv2.imwrite(fileName, grayCanvas)
+                cv2.imwrite(str(folderPath / fileName), grayCanvas)
                 logMsg("INFO", f"Saved delayed capture: {fileName}")
                 if pictureCnt == 1 or pictureCnt == 2:
-                    fileTransporter.sendFile(filePath + fileName, f"~/{filePath}{fileName}")
+                    fileTransporter.sendFile(str(folderPath / fileName), f"~/pics/{fileName}")
                     fileTransporter.close()
                 pictureCnt += 1
                 
