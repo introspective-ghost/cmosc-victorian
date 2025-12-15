@@ -5,6 +5,7 @@ import pygame
 from pathlib import Path
 from screeninfo import get_monitors
 
+# os.environ["SDL_VIDEO_FULLSCREEN_DISPLAY"] = "1"
 # Paths to the images
 PIC_DIR = Path.home() / "pics"
 PIC1 = PIC_DIR / "pic1.jpg"
@@ -12,17 +13,19 @@ PIC2 = PIC_DIR / "pic2.jpg"
 
 lastCaptureTime = {"pic1": None, "pic2": None}
 
-# Setup monitors
-monitor0 = {"width":1920,"height":1080,"x":0,"y":0}
-monitor1 = {"width":1920,"height":1080,"x":1920,"y":0}
+monitors = sorted(get_monitors(), key=lambda m: m.x)
 
-# Total desktop size (side-by-side layout assumed)
-total_width = monitor0["width"] + monitor1["width"]
-total_height = max(monitor0["height"], monitor1["height"])
+monitor0 = {"width": monitors[0].width, "height": monitors[0].height,
+            "x": monitors[0].x, "y": monitors[0].y}
+monitor1 = {"width": monitors[1].width, "height": monitors[1].height,
+            "x": monitors[1].x, "y": monitors[1].y}
 
-# Initialize pygame
+total_width = sum(m.width for m in monitors)
+total_height = max(m.height for m in monitors)
+
 pygame.init()
 screen = pygame.display.set_mode((total_width, total_height), pygame.NOFRAME)
+
 
 def cv2ToPygame(img):
     """Convert OpenCV image (BGR) to pygame surface."""
@@ -63,14 +66,9 @@ def check_and_update():
             lastCaptureTime["pic2"] = mtime2
 
 def main():
-    print("Displaying initial images...")
+    
     if PIC1.exists():
-        lastCaptureTime["pic1"] = PIC1.stat().st_mtime
         showImg(PIC1, monitor0, 0)
-
-    if PIC2.exists():
-        lastCaptureTime["pic2"] = PIC2.stat().st_mtime
-        showImg(PIC2, monitor1, monitor0["width"])
 
     print("Monitoring ~/pics for changes...")
     running = True
