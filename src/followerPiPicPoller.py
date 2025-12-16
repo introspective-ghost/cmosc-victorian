@@ -5,7 +5,6 @@ import pygame
 from pathlib import Path
 from screeninfo import get_monitors
 
-# os.environ["SDL_VIDEO_FULLSCREEN_DISPLAY"] = "1"
 # Paths to the images
 PIC_DIR = Path.home() / "pics"
 PIC1 = PIC_DIR / "pic1.jpg"
@@ -14,6 +13,7 @@ PIC2 = PIC_DIR / "pic2.jpg"
 lastCaptureTime = {"pic1": None, "pic2": None}
 
 monitors = sorted(get_monitors(), key=lambda m: m.x)
+print(monitors)
 
 monitor0 = {"width": monitors[0].width, "height": monitors[0].height,
             "x": monitors[0].x, "y": monitors[0].y}
