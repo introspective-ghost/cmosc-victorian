@@ -1,42 +1,32 @@
-import paramiko
-from scp import SCPClient
+import subprocess
 
 class LocalNetworkPicTransfer:
     def __init__(self, host, user="cmosc", port=22, keyFile="/home/cmosc/.ssh/id_ed25519"):
         """
-        Initialize the SCP transfer class.
+        Initialize the rsync transfer class.
         :param host: Hostname or IP of target Pi
         :param user: SSH username. Default "cmosc"
-        :param port: SSF port. Default 22
+        :param port: SSH port. Default 22
         :param keyFile: Path to private key file. Default "~/.ssh/id_ed25519"
         """
         self.host = host
         self.user = user
         self.port = port
         self.keyFile = keyFile
-        self.ssh = None
-        
-    def connect(self):
-        """ Establish SSH connection using key authentication"""
-        self.ssh = paramiko.SSHClient()
-        self.ssh.load_system_host_keys()
-        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.ssh.connect(
-            self.host,
-            port=self.port,
-            username=self.user,
-            key_filename=self.keyFile
-        )
-    
+
     def sendFile(self, localPath, remotePath):
-        """Send a file from local Pi to remote Pi"""
-        if not self.ssh:
-            self.connect()
-        with SCPClient(self.ssh.get_transport()) as scp:
-            scp.put(localPath, remotePath)
-            
+        """Send a file from local Pi to remote Pi using rsync over SSH"""
+        remote = f"{self.user}@{self.host}:{remotePath}"
+        cmd = [
+            "rsync",
+            "-av", # archive mode (preserves permissions, group, owners, etc.), verbose
+            "--no-times",
+            "-e", f"ssh -i {self.keyFile} -p {self.port}",  # specify SSH key and port
+            localPath,
+            remote
+        ]
+        subprocess.run(cmd, check=True)
+
     def close(self):
-        """Close SSH connection"""
-        if self.ssh:
-            self.ssh.close()
-            self.ssh = None
+        """No persistent connection to close with rsync"""
+        pass

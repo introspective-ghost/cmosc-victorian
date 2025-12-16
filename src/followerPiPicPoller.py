@@ -49,19 +49,28 @@ def showImg(imgPath, monitor, offsetX):
     # Draw at offsetX (left edge of that monitor)
     screen.blit(surface, (offsetX, 0))
     pygame.display.update()
+    
+def isJpegComplete(path):
+    """Check if JPEG file ends with the proper marker."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(-2, os.SEEK_END)
+            return f.read() == b'\xff\xd9'
+    except Exception:
+        return False
 
 def check_and_update():
     global lastCaptureTime
 
     if PIC1.exists():
         mtime1 = PIC1.stat().st_mtime
-        if lastCaptureTime["pic1"] != mtime1:
+        if lastCaptureTime["pic1"] != mtime1 and isJpegComplete(PIC1):
             showImg(PIC1, monitor0, 0)
             lastCaptureTime["pic1"] = mtime1
 
     if PIC2.exists():
         mtime2 = PIC2.stat().st_mtime
-        if lastCaptureTime["pic2"] != mtime2:
+        if lastCaptureTime["pic2"] != mtime2 and isJpegComplete(PIC2):
             showImg(PIC2, monitor1, monitor0["width"])
             lastCaptureTime["pic2"] = mtime2
 
