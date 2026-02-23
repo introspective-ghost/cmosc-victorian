@@ -20,8 +20,8 @@ monitor0 = {"width": monitors[0].width, "height": monitors[0].height,
 monitor1 = {"width": monitors[1].width, "height": monitors[1].height,
             "x": monitors[1].x, "y": monitors[1].y}
 
-total_width = sum(m.width for m in monitors)
-total_height = max(m.height for m in monitors)
+total_width = monitor0["width"] + monitor1["width"]
+total_height = max(monitor0["height"], monitor1["height"])
 
 pygame.init()
 screen = pygame.display.set_mode((total_width, total_height), pygame.NOFRAME)

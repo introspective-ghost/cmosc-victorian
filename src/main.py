@@ -22,7 +22,7 @@ CANVAS_HEIGHT = 1080
 FRAME_WIDTH = 1350
 FRAME_HEIGHT = 1080
 PATH_TO_REPO = Path.home() / "cmosc-victorian"
-BACKUP_BG_imgPath = PATH_TO_REPO / "backgroundImages/backdrop01.jpg"
+BACKUP_BG_IMG_PATH = PATH_TO_REPO / "backgroundImages/backdrop01.jpg"
 MAX_CONSECUTIVE_ERRORS = 5
 WATCHDOG_DELAY = 3  # seconds before restart if unrecoverable
 BUTTON_PIN = 17  # GPIO pin for button
@@ -60,10 +60,10 @@ def startupChecks():
     if FRAME_WIDTH > CANVAS_WIDTH or FRAME_HEIGHT > CANVAS_HEIGHT:
         logMsg("ERROR", f"Cropped frame size ({FRAME_WIDTH}x{FRAME_HEIGHT}) exceeds canvas size ({CANVAS_WIDTH}x{CANVAS_HEIGHT})")
         sys.exit(1)
-    if not BACKUP_BG_imgPath.exists():
-        logMsg("ERROR", f"Background image not found: {str(BACKUP_BG_imgPath)}")
+    if not BACKUP_BG_IMG_PATH.exists():
+        logMsg("ERROR", f"Background image not found: {str(BACKUP_BG_IMG_PATH)}")
         sys.exit(1)
-    bgTest = cv2.imread(str(BACKUP_BG_imgPath))
+    bgTest = cv2.imread(str(BACKUP_BG_IMG_PATH))
     if bgTest is None:
         logMsg("ERROR", "Failed to read background image")
         sys.exit(1)
@@ -143,7 +143,7 @@ def matchFrameColorChannelsToTarget(img, targetChannels=3):
 
     return img
 
-def centerInCanvas(frame, bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT):
+def centerFrameInCanvas(frame, bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT):
     """
     Places `frame` centered inside a fixed-size canvas.
     Side padding is filled with the background image
@@ -244,7 +244,7 @@ def cv2ToPygame(img):
     imgRgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return pygame.surfarray.make_surface(imgRgb.swapaxes(0, 1))
 
-def showImg(imgPath, monitor, offset_x):
+def showImg(imgPath, monitor, offsetX):
     if not imgPath.exists():
         print(f"Warning: {imgPath} not found")
         return
@@ -259,7 +259,7 @@ def showImg(imgPath, monitor, offset_x):
     surface = cv2ToPygame(img)
 
     # Draw at offset_x (left edge of that monitor)
-    screen.blit(surface, (offset_x, 0))
+    screen.blit(surface, (offsetX, 0))
     pygame.display.update()
     
 def showStream(surface):
@@ -357,7 +357,7 @@ def runPipeline():
             composite = cv2.add(fg, bg)
             composite = cv2.medianBlur(composite, 3)
 
-            padded = centerInCanvas(composite, bgImgOriginal, CANVAS_WIDTH, CANVAS_HEIGHT)
+            padded = centerFrameInCanvas(composite, bgImgOriginal, CANVAS_WIDTH, CANVAS_HEIGHT)
             streamSurface = cv2ToPygame(padded)
             showStream(streamSurface)
 
