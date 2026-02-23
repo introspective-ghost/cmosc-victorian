@@ -221,22 +221,17 @@ def fitAndCropBackground(bgImg, frameWidth=FRAME_WIDTH, frameHeight=FRAME_HEIGHT
     return bgCanvas[yFrame:yFrame+frameHeight, xFrame:xFrame+frameWidth]
 
 # --- BUTTON HANDLER ---
+lastPressTime = 0
+
 def onButtonPress(channel):
-    global debounceActive, pendingCapture, captureStartTime
-    if debounceActive:
-        # ignore subsequent button presses until 3 seconds have passed
-        return
-    debounceActive = True
+    global lastPressTime, pendingCapture, captureStartTime
+    now = time.time()
+    if now - lastPressTime < 3:
+        return  # Ignore if less than 3 seconds since last press
+    lastPressTime = now
     logMsg("INFO", "Button pressed")
     pendingCapture = True
-    captureStartTime = time.time()
-    # Set debounceActive back to false after 3 seconds
-    Thread(target=resetDebounce).start()
-    
-def resetDebounce():
-    global debounceActive
-    time.sleep(3)
-    debounceActive = False
+    captureStartTime = now
     
 # --- PYGAME SETUP ---
 def cv2ToPygame(img):
@@ -263,18 +258,19 @@ def showImg(imgPath, monitor, offsetX):
     pygame.display.update()
     
 def showStream(surface):
-    # Draw at offset_x (left edge of that monitor)
+    # Draw at top left corner of monitor 0
     screen.blit(surface, (0, 0))
     pygame.display.update()
 
 # --- MAIN  PROCESSING LOOP ---
 def runPipeline():
     global picam2, button, pendingCapture, fileTransporter
-    rotate180 = libcamera.Transform(hflip=True, vflip=True)
     
     # TODO: Will need to be modular for USB integration
     backgroundFolderPath = PATH_TO_REPO / "backgroundImages"
     backgrounds = [f for f in backgroundFolderPath.iterdir() if f.is_file()]
+    
+    rotate180 = libcamera.Transform(hflip=True, vflip=True)
     try:
         picam2 = Picamera2()
         config = picam2.create_preview_configuration(main={"size": (CANVAS_WIDTH, CANVAS_HEIGHT)},transform=rotate180)
@@ -287,11 +283,6 @@ def runPipeline():
         button = ButtonHandler(BUTTON_PIN, onButtonPress)
         # victorian1 has a static IPv4 address
         fileTransporter = LocalNetworkPicTransfer("victorian1.local", "cmosc")
-        try:
-            fileTransporter.connect()
-        except Exception as e:
-            logMsg("ERROR", f"SSH connection failed: {e}")
-            raise RuntimeError("Follower Pi not found. Check Ethernet cable/connection")
         # 0-212
         cropX = 212
         # 0-751
@@ -305,7 +296,7 @@ def runPipeline():
         backgroundCnt = 0
         # select the last image in the list to be the first background so our first button press shows the 0th image in the array
         bgImgOriginal = cv2.imread(str(backgrounds[len(backgrounds) - 1]))
-        while True:
+        while True:                    
             try:
                 frame = picam2.capture_array()
                 if frame is None or frame.size == 0:
@@ -359,6 +350,7 @@ def runPipeline():
 
             padded = centerFrameInCanvas(composite, bgImgOriginal, CANVAS_WIDTH, CANVAS_HEIGHT)
             streamSurface = cv2ToPygame(padded)
+            
             showStream(streamSurface)
 
             if pendingCapture and (time.time() - captureStartTime >= 3):
@@ -377,8 +369,11 @@ def runPipeline():
                 logMsg("INFO", f"Saved delayed capture: {fileName}")
                 # pic1 and pic2 get sent to follower rpi
                 if pictureCnt == 1 or pictureCnt == 2:
-                    fileTransporter.sendFile(str(folderPath / fileName), f"~/pics/{fileName}")
-                    fileTransporter.close()
+                    try:
+                        fileTransporter.sendFile(str(folderPath / fileName), f"~/pics/{fileName}")
+                    except Exception as e:
+                        logMsg("ERROR", f"rsync file transfer failed: {e}")
+                        raise RuntimeError("Follower Pi not found. Check Ethernet cable/connection")
                 pictureCnt += 1
                 
                 # update the background image
@@ -387,8 +382,7 @@ def runPipeline():
                 
                 # display image on screen for 2 seconds
                 showImg(Path(fileName), monitor0, 0)
-                cv2.waitKey(3000)
-                
+                cv2.waitKey(2000)
                 
                 pendingCapture = False  # reset
 
