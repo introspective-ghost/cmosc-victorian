@@ -296,6 +296,12 @@ def runPipeline():
         backgroundCnt = 0
         # select the last image in the list to be the first background so our first button press shows the 0th image in the array
         bgImgOriginal = cv2.imread(str(backgrounds[len(backgrounds) - 1]))
+
+        # Show last captured pic0 on monitor1 at startup if it exists
+        pic0Path = PATH_TO_REPO / "pics/pic0.jpg"
+        if pic0Path.exists():
+            showImg(pic0Path, monitor1, CANVAS_WIDTH)
+
         while True:                    
             try:
                 frame = picam2.capture_array()
@@ -367,6 +373,9 @@ def runPipeline():
                 
                 cv2.imwrite(str(folderPath / fileName), grayCanvas)
                 logMsg("INFO", f"Saved delayed capture: {fileName}")
+                # pic0 is displayed on monitor1
+                if pictureCnt == 0:
+                    showImg(folderPath / fileName, monitor1, CANVAS_WIDTH)
                 # pic1 and pic2 get sent to follower rpi
                 if pictureCnt == 1 or pictureCnt == 2:
                     try:
