@@ -380,9 +380,9 @@ def runPipeline():
                 bgImgOriginal = cv2.imread(str(backgrounds[backgroundCnt]))
                 backgroundCnt += 1
                 
-                # display image on screen for 2 seconds
-                showImg(Path(fileName), monitor0, 0)
-                cv2.waitKey(2000)
+                # display image on screen for 3 seconds
+                showImg(folderPath / fileName, monitor0, 0)
+                time.sleep(3)
                 
                 pendingCapture = False  # reset
 
