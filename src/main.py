@@ -1,3 +1,7 @@
+import os
+os.environ['SDL_VIDEODRIVER'] = 'x11'
+os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
+
 import sys
 import time
 import signal
@@ -15,7 +19,7 @@ from datetime import datetime
 from picamera2 import Picamera2
 from buttonHandler import ButtonHandler
 from piFileTransfer import LocalNetworkPicTransfer
-
+time.sleep(3)
 
 # --- CONFIG ---
 # Frame-to-canvas size ratios (preserved when scaling to actual monitor resolution)
@@ -38,7 +42,7 @@ debounceActive = False
 _monitors = sorted(get_monitors(), key=lambda m: m.x)
 monitor0 = {"width": _monitors[0].width, "height": _monitors[0].height, "x": _monitors[0].x, "y": _monitors[0].y}
 monitor1 = {"width": _monitors[1].width, "height": _monitors[1].height, "x": _monitors[1].x, "y": _monitors[1].y}
-
+print(_monitors)
 CANVAS_WIDTH  = monitor0["width"]
 CANVAS_HEIGHT = monitor0["height"]
 FRAME_WIDTH   = int(CANVAS_WIDTH  * FRAME_WIDTH_RATIO)
