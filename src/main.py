@@ -8,6 +8,7 @@ import libcamera
 import pygame
 
 from pathlib import Path
+from screeninfo import get_monitors
 from threading import Thread
 from gc import collect
 from datetime import datetime
@@ -17,10 +18,10 @@ from piFileTransfer import LocalNetworkPicTransfer
 
 
 # --- CONFIG ---
-CANVAS_WIDTH = 1920
-CANVAS_HEIGHT = 1080
-FRAME_WIDTH = 1350
-FRAME_HEIGHT = 1080
+# Frame-to-canvas size ratios (preserved when scaling to actual monitor resolution)
+FRAME_WIDTH_RATIO  = 1350 / 1920
+FRAME_HEIGHT_RATIO = 1080 / 1080
+
 PATH_TO_REPO = Path.home() / "cmosc-victorian"
 BACKUP_BG_IMG_PATH = PATH_TO_REPO / "backgroundImages/backdrop01.jpg"
 MAX_CONSECUTIVE_ERRORS = 5
@@ -34,8 +35,14 @@ pendingCapture = False
 debounceActive = False
 
 # Setup monitors
-monitor0 = {"width":CANVAS_WIDTH,"height":CANVAS_HEIGHT,"x":0,"y":0}
-monitor1 = {"width":CANVAS_WIDTH,"height":CANVAS_HEIGHT,"x":CANVAS_WIDTH,"y":0}
+_monitors = sorted(get_monitors(), key=lambda m: m.x)
+monitor0 = {"width": _monitors[0].width, "height": _monitors[0].height, "x": _monitors[0].x, "y": _monitors[0].y}
+monitor1 = {"width": _monitors[1].width, "height": _monitors[1].height, "x": _monitors[1].x, "y": _monitors[1].y}
+
+CANVAS_WIDTH  = monitor0["width"]
+CANVAS_HEIGHT = monitor0["height"]
+FRAME_WIDTH   = int(CANVAS_WIDTH  * FRAME_WIDTH_RATIO)
+FRAME_HEIGHT  = int(CANVAS_HEIGHT * FRAME_HEIGHT_RATIO)
 
 # Total desktop size (side-by-side layout assumed)
 total_width = monitor0["width"] + monitor1["width"]
@@ -358,6 +365,10 @@ def runPipeline():
             streamSurface = cv2ToPygame(padded)
             
             showStream(streamSurface)
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_q):
+                    cleanupAndExit()
 
             if pendingCapture and (time.time() - captureStartTime >= 3):
                 if pictureCnt == 3:
