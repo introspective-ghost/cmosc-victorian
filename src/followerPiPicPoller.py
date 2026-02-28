@@ -1,5 +1,8 @@
-import cv2
 import os
+os.environ['SDL_VIDEODRIVER'] = 'x11'
+os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
+
+import cv2
 import time
 import pygame
 from pathlib import Path
@@ -12,13 +15,11 @@ PIC2 = PIC_DIR / "pic2.jpg"
 
 lastCaptureTime = {"pic1": None, "pic2": None}
 
-monitors = sorted(get_monitors(), key=lambda m: m.x)
-print(monitors)
-
-monitor0 = {"width": monitors[0].width, "height": monitors[0].height,
-            "x": monitors[0].x, "y": monitors[0].y}
-monitor1 = {"width": monitors[1].width, "height": monitors[1].height,
-            "x": monitors[1].x, "y": monitors[1].y}
+# Setup monitors
+_monitors = sorted(get_monitors(), key=lambda m: m.x)
+monitor0 = {"width": _monitors[0].width, "height": _monitors[0].height, "x": _monitors[0].x, "y": _monitors[0].y}
+monitor1 = {"width": _monitors[1].width, "height": _monitors[1].height, "x": _monitors[1].x, "y": _monitors[1].y}
+print(_monitors)
 
 total_width = monitor0["width"] + monitor1["width"]
 total_height = max(monitor0["height"], monitor1["height"])
