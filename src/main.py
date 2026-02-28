@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import subprocess
 import libcamera
+import pygame
 
 from pathlib import Path
 from threading import Thread
@@ -12,25 +13,40 @@ from gc import collect
 from datetime import datetime
 from picamera2 import Picamera2
 from buttonHandler import ButtonHandler
+from piFileTransfer import LocalNetworkPicTransfer
 
 
 # --- CONFIG ---
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
-FRAME_WIDTH = 1420
+FRAME_WIDTH = 1350
 FRAME_HEIGHT = 1080
-BACKUP_BG_IMG_PATH = Path("backgroundImages/backdrop01.jpg")
+PATH_TO_REPO = Path.home() / "cmosc-victorian"
+BACKUP_BG_IMG_PATH = PATH_TO_REPO / "backgroundImages/backdrop01.jpg"
 MAX_CONSECUTIVE_ERRORS = 5
 WATCHDOG_DELAY = 3  # seconds before restart if unrecoverable
 BUTTON_PIN = 17  # GPIO pin for button
 
 canvas = None
 button = None
+fileTransporter = None
 pendingCapture = False
 debounceActive = False
 
+# Setup monitors
+monitor0 = {"width":CANVAS_WIDTH,"height":CANVAS_HEIGHT,"x":0,"y":0}
+monitor1 = {"width":CANVAS_WIDTH,"height":CANVAS_HEIGHT,"x":CANVAS_WIDTH,"y":0}
+
+# Total desktop size (side-by-side layout assumed)
+total_width = monitor0["width"] + monitor1["width"]
+total_height = max(monitor0["height"], monitor1["height"])
+
+# Initialize pygame
+pygame.init()
+screen = pygame.display.set_mode((total_width, total_height), pygame.NOFRAME)
+
 # --- LOGGING ---
-logDir = Path("logs")
+logDir = PATH_TO_REPO / "logs"
 logDir.mkdir(parents=True, exist_ok=True)
 LOG_FILE = logDir / f"greenscreen_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 def logMsg(level, msg):
@@ -86,7 +102,13 @@ def cleanupAndExit(signum=None, frame=None):
         logMsg("INFO", "Garbage collection completed")
     except Exception as e:
         logMsg("WARNING", f"Garbage collection issue: {e}")
-
+    
+    try:
+        fileTransporter.close()
+        logMsg("INFO", "SSH connection closed")
+    except Exception as e:
+        logMsg("WARNING", "Problem closing ssh connection")
+        
     logMsg("INFO", "Program terminated via signal")
     sys.exit(0)
 
@@ -121,7 +143,7 @@ def matchFrameColorChannelsToTarget(img, targetChannels=3):
 
     return img
 
-def centerInCanvas(frame, bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT):
+def centerFrameInCanvas(frame, bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT):
     """
     Places `frame` centered inside a fixed-size canvas.
     Side padding is filled with the background image
@@ -199,31 +221,56 @@ def fitAndCropBackground(bgImg, frameWidth=FRAME_WIDTH, frameHeight=FRAME_HEIGHT
     return bgCanvas[yFrame:yFrame+frameHeight, xFrame:xFrame+frameWidth]
 
 # --- BUTTON HANDLER ---
+lastPressTime = 0
+
 def onButtonPress(channel):
-    global debounceActive, pendingCapture, captureStartTime
-    if debounceActive:
-        # ignore subsequent button presses until 3 seconds have passed
-        return
-    debounceActive = True
+    global lastPressTime, pendingCapture, captureStartTime
+    now = time.time()
+    if now - lastPressTime < 3:
+        return  # Ignore if less than 3 seconds since last press
+    lastPressTime = now
     logMsg("INFO", "Button pressed")
     pendingCapture = True
-    captureStartTime = time.time()
-    # Set debounceActive back to false after 3 seconds
-    Thread(target=resetDebounce).start()
+    captureStartTime = now
     
-def resetDebounce():
-    global debounceActive
-    time.sleep(3)
-    debounceActive = False
+# --- PYGAME SETUP ---
+def cv2ToPygame(img):
+    """Convert OpenCV image (BGR) to pygame surface."""
+    imgRgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return pygame.surfarray.make_surface(imgRgb.swapaxes(0, 1))
+
+def showImg(imgPath, monitor, offsetX):
+    if not imgPath.exists():
+        print(f"Warning: {imgPath} not found")
+        return
+
+    img = cv2.imread(str(imgPath))
+    if img is None:
+        print(f"Error: Could not load {imgPath}")
+        return
+
+    # Scale to fit monitor
+    img = cv2.resize(img, (monitor["width"], monitor["height"]))
+    surface = cv2ToPygame(img)
+
+    # Draw at offset_x (left edge of that monitor)
+    screen.blit(surface, (offsetX, 0))
+    pygame.display.update()
+    
+def showStream(surface):
+    # Draw at top left corner of monitor 0
+    screen.blit(surface, (0, 0))
+    pygame.display.update()
 
 # --- MAIN  PROCESSING LOOP ---
 def runPipeline():
-    global picam2, button, pendingCapture
-    rotate180 = libcamera.Transform(hflip=True, vflip=True)
+    global picam2, button, pendingCapture, fileTransporter
     
-    # Will need to be modular for USB integration
-    backgroundFolderPath = Path("backgroundImages")
+    # TODO: Will need to be modular for USB integration
+    backgroundFolderPath = PATH_TO_REPO / "backgroundImages"
     backgrounds = [f for f in backgroundFolderPath.iterdir() if f.is_file()]
+    
+    rotate180 = libcamera.Transform(hflip=True, vflip=True)
     try:
         picam2 = Picamera2()
         config = picam2.create_preview_configuration(main={"size": (CANVAS_WIDTH, CANVAS_HEIGHT)},transform=rotate180)
@@ -232,25 +279,24 @@ def runPipeline():
         
         time.sleep(0.5)
         logMsg("INFO", "Camera started successfully")
-
-        cv2.namedWindow("Greenscreen Composite", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Greenscreen Composite", 1080, 720)
         
         button = ButtonHandler(BUTTON_PIN, onButtonPress)
+        # victorian1 has a static IPv4 address
+        fileTransporter = LocalNetworkPicTransfer("victorian1.local", "cmosc")
         # 0-212
-        cropX = 0
+        cropX = 212
         # 0-751
         cropY = 0
         # HSV thresholds for green screen
         hLow, sLow, vLow = 35, 40, 40
-        hHigh, sHigh, vHigh = 85, 255, 255
+        hHigh, sHigh, vHigh = 95, 255, 255
 
         errCnt = 0
         pictureCnt = 0
         backgroundCnt = 0
         # select the last image in the list to be the first background so our first button press shows the 0th image in the array
         bgImgOriginal = cv2.imread(str(backgrounds[len(backgrounds) - 1]))
-        while True:
+        while True:                    
             try:
                 frame = picam2.capture_array()
                 if frame is None or frame.size == 0:
@@ -264,8 +310,8 @@ def runPipeline():
                 continue
             errCnt = 0  # reset error count on success
             
-            # flip image over x-axis
-            frame = cv2.flip(frame, 0)
+            # flip image over y-axis
+            frame = cv2.flip(frame, 1)
             
             if cropX + FRAME_WIDTH > CANVAS_WIDTH or cropY + FRAME_HEIGHT > CANVAS_HEIGHT:
                 raise ValueError(f"Crop out of bounds: X={cropX}, Y={cropY}")
@@ -284,6 +330,9 @@ def runPipeline():
             # Create greenscreen mask
             hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, np.array([hLow, sLow, vLow]), np.array([hHigh, sHigh, vHigh]))
+            kernel = np.ones((3,3), np.uint8)
+            mask = cv2.morphologyEx(mask,cv2.MORPH_OPEN, kernel) # remove small noise
+            mask = cv2.morphologyEx(mask,cv2.MORPH_CLOSE, kernel) # close small holes
             
             # Resize mask to match cropped frame
             if cropped.shape[:2] != mask.shape[:2]:
@@ -297,9 +346,12 @@ def runPipeline():
             fg = cv2.bitwise_and(cropped, cropped, mask=maskInv)
             bg = cv2.bitwise_and(greenScreenImg, greenScreenImg, mask=mask)
             composite = cv2.add(fg, bg)
+            composite = cv2.medianBlur(composite, 3)
 
-            padded = centerInCanvas(composite, bgImgOriginal, CANVAS_WIDTH, CANVAS_HEIGHT)
-            cv2.imshow("Greenscreen Composite", padded)
+            padded = centerFrameInCanvas(composite, bgImgOriginal, CANVAS_WIDTH, CANVAS_HEIGHT)
+            streamSurface = cv2ToPygame(padded)
+            
+            showStream(streamSurface)
 
             if pendingCapture and (time.time() - captureStartTime >= 3):
                 if pictureCnt == 3:
@@ -308,9 +360,20 @@ def runPipeline():
                     backgroundCnt = 0
                 # create greyscale image
                 grayCanvas = cv2.cvtColor(padded, cv2.COLOR_BGR2GRAY)
-                filename = f"pics/pic{pictureCnt}.jpg"
-                cv2.imwrite(filename, grayCanvas)
-                logMsg("INFO", f"Saved delayed capture: {filename}")
+                # handle image path creation and save to path
+                folderPath = PATH_TO_REPO / "pics/"
+                folderPath.mkdir(exist_ok=True)
+                fileName = f"pic{pictureCnt}.jpg"
+                
+                cv2.imwrite(str(folderPath / fileName), grayCanvas)
+                logMsg("INFO", f"Saved delayed capture: {fileName}")
+                # pic1 and pic2 get sent to follower rpi
+                if pictureCnt == 1 or pictureCnt == 2:
+                    try:
+                        fileTransporter.sendFile(str(folderPath / fileName), f"~/pics/{fileName}")
+                    except Exception as e:
+                        logMsg("ERROR", f"rsync file transfer failed: {e}")
+                        raise RuntimeError("Follower Pi not found. Check Ethernet cable/connection")
                 pictureCnt += 1
                 
                 # update the background image
@@ -318,24 +381,10 @@ def runPipeline():
                 backgroundCnt += 1
                 
                 # display image on screen for 2 seconds
-                cv2.imshow("Greenscreen Composite", grayCanvas)
-                cv2.waitKey(3000)
+                showImg(Path(fileName), monitor0, 0)
+                cv2.waitKey(2000)
                 
                 pendingCapture = False  # reset
-
-
-            # Handle exit and snapshot keys
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:  # ESC
-                logMsg("INFO", "Exit requested by user")
-                break
-            elif key == ord('s'):
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                outName = f"composite_{ts}.jpg"
-                if cv2.imwrite(outName, composite):
-                    logMsg("INFO", f"Snapshot saved: {outName}")
-                else:
-                    logMsg("ERROR", "Snapshot save failed")
 
     except Exception as err:
         logMsg("ERROR", f"Fatal pipeline error: {err}")
