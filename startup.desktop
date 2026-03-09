@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=FollowerPiPicPoller
+Exec=/usr/bin/python3 /home/cmosc/cmosc-victorian/src/followerPiPicPoller.py
+X-GNOME-Autostart-enabled=true
+
