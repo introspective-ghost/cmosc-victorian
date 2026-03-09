@@ -1,5 +1,7 @@
-import cv2
 import os
+os.environ['SDL_VIDEODRIVER'] = 'x11'
+
+import cv2
 import time
 import pygame
 from pathlib import Path
@@ -12,13 +14,13 @@ PIC2 = PIC_DIR / "pic2.jpg"
 
 lastCaptureTime = {"pic1": None, "pic2": None}
 
-monitors = sorted(get_monitors(), key=lambda m: m.x)
-print(monitors)
+# Setup monitors
+_monitors = sorted(get_monitors(), key=lambda m: m.x)
+monitor0 = {"width": _monitors[0].width, "height": _monitors[0].height, "x": _monitors[0].x, "y": _monitors[0].y}
+monitor1 = {"width": _monitors[1].width, "height": _monitors[1].height, "x": _monitors[1].x, "y": _monitors[1].y}
+print(_monitors)
 
-monitor0 = {"width": monitors[0].width, "height": monitors[0].height,
-            "x": monitors[0].x, "y": monitors[0].y}
-monitor1 = {"width": monitors[1].width, "height": monitors[1].height,
-            "x": monitors[1].x, "y": monitors[1].y}
+os.environ['SDL_VIDEO_WINDOW_POS'] = f'{monitor0["x"]},{monitor0["y"]}'
 
 total_width = monitor0["width"] + monitor1["width"]
 total_height = max(monitor0["height"], monitor1["height"])
@@ -32,7 +34,7 @@ def cv2ToPygame(img):
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return pygame.surfarray.make_surface(img_rgb.swapaxes(0, 1))
 
-def showImg(imgPath, monitor, offsetX):
+def showImg(imgPath, monitor):
     if not imgPath.exists():
         print(f"Warning: {imgPath} not found")
         return
@@ -46,8 +48,8 @@ def showImg(imgPath, monitor, offsetX):
     img = cv2.resize(img, (monitor["width"], monitor["height"]))
     surface = cv2ToPygame(img)
 
-    # Draw at offsetX (left edge of that monitor)
-    screen.blit(surface, (offsetX, 0))
+    # Draw at this monitor's position relative to the window origin (monitor0)
+    screen.blit(surface, (monitor["x"] - monitor0["x"], 0))
     pygame.display.update()
     
 def isJpegComplete(path):
@@ -65,19 +67,19 @@ def check_and_update():
     if PIC1.exists():
         mtime1 = PIC1.stat().st_mtime
         if lastCaptureTime["pic1"] != mtime1 and isJpegComplete(PIC1):
-            showImg(PIC1, monitor0, 0)
+            showImg(PIC1, monitor0)
             lastCaptureTime["pic1"] = mtime1
 
     if PIC2.exists():
         mtime2 = PIC2.stat().st_mtime
         if lastCaptureTime["pic2"] != mtime2 and isJpegComplete(PIC2):
-            showImg(PIC2, monitor1, monitor0["width"])
+            showImg(PIC2, monitor1)
             lastCaptureTime["pic2"] = mtime2
 
 def main():
     
     if PIC1.exists():
-        showImg(PIC1, monitor0, 0)
+        showImg(PIC1, monitor0)
 
     print("Monitoring ~/pics for changes...")
     running = True

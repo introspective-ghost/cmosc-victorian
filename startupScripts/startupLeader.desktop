@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Main
+Exec=lxterminal -e /usr/bin/python3 /home/cmosc/cmosc-victorian/src/main.py
+X-GNOME-Autostart-enabled=true
+
