@@ -28,6 +28,9 @@ FRAME_HEIGHT_RATIO = 1080 / 1080
 
 PATH_TO_REPO = Path.home() / "cmosc-victorian"
 BACKUP_BG_IMG_PATH = PATH_TO_REPO / "backgroundImages/backdrop01.jpg"
+LOCAL_BG_FOLDER = PATH_TO_REPO / "backgroundImages"
+USB_MOUNT_BASE = Path("/media")
+BG_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 MAX_CONSECUTIVE_ERRORS = 5
 WATCHDOG_DELAY = 3  # seconds before restart if unrecoverable
 BUTTON_PIN = 17  # GPIO pin for button
@@ -154,82 +157,113 @@ def matchFrameColorChannelsToTarget(img, targetChannels=3):
 
     return img
 
+def scaleBgToCanvas(bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT, isZoomingWidth=True):
+    """
+    Scale background to exactly (canvasWidth x canvasHeight) using zoom-and-crop. 
+    This is the single source of truth for background scaling so
+    that the frame region and the canvas padding always match.
+    """
+    if isZoomingWidth:
+        scale = canvasWidth / bgImg.shape[1]
+        newW = canvasWidth
+        newH = int(bgImg.shape[0] * scale)
+        bgScaled = cv2.resize(bgImg, (newW, newH), interpolation=cv2.INTER_LINEAR)
+        if newH >= canvasHeight:
+            yStart = (newH - canvasHeight) // 2
+            return bgScaled[yStart:yStart+canvasHeight, :]
+        else:
+            padTop = (canvasHeight - newH) // 2
+            padBottom = canvasHeight - newH - padTop
+            return cv2.copyMakeBorder(bgScaled, padTop, padBottom, 0, 0,
+                                      cv2.BORDER_CONSTANT, value=(0,0,0))
+    else:
+        scale = canvasHeight / bgImg.shape[0]
+        newH = canvasHeight
+        newW = int(bgImg.shape[1] * scale)
+        bgScaled = cv2.resize(bgImg, (newW, newH), interpolation=cv2.INTER_LINEAR)
+        if newW >= canvasWidth:
+            xStart = (newW - canvasWidth) // 2
+            return bgScaled[:, xStart:xStart+canvasWidth]
+        else:
+            padLeft = (canvasWidth - newW) // 2
+            padRight = canvasWidth - newW - padLeft
+            return cv2.copyMakeBorder(bgScaled, 0, 0, padLeft, padRight,
+                                      cv2.BORDER_CONSTANT, value=(0,0,0))
+
 def centerFrameInCanvas(frame, bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT):
     """
     Places `frame` centered inside a fixed-size canvas.
-    Side padding is filled with the background image
-    
-    frame: the composite (cropped subject)
-    bgImg: the original background image (will be resized to canvas size)
+    Side padding is filled with the background image scaled the same way as the
+    frame region, so the two always blend seamlessly regardless of source image size.
     """
     h, w = frame.shape[:2]
-    # Resize background to match canvas
-    bgResized = cv2.resize(bgImg, (canvasWidth, canvasHeight), interpolation=cv2.INTER_AREA)
-
-    # Start with the background as the canvas
-    canvas = bgResized.copy()
-
-    # Compute offsets for centering the frame
+    canvas = scaleBgToCanvas(bgImg, canvasWidth, canvasHeight).copy()
     xOffset = (canvasWidth - w) // 2
     yOffset = (canvasHeight - h) // 2
-
     if xOffset < 0 or yOffset < 0:
         raise ValueError("Frame larger than canvas — increase canvas size")
-
-    # Place the frame into the center of the canvas
     canvas[yOffset:yOffset+h, xOffset:xOffset+w] = frame
-
     return canvas
 
 def fitAndCropBackground(bgImg, frameWidth=FRAME_WIDTH, frameHeight=FRAME_HEIGHT,
                          canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT,
                          isZoomingWidth=True):
     """
-    Scale the background image to cover the canvas either by width or height,
-    then crop/pad to canvas size, and finally cut out a region the same
-    size as the frame.
-
-    - If isZoomingWidth=True: scale so width matches canvasWidth.
-    - If isZoomingWidth=False: scale so height matches canvasHeight.
+    Scale background to canvas size (via scaleBgToCanvas), then crop the center
+    region matching the frame. Uses the same scaling as centerFrameInCanvas so the
+    frame and canvas padding are always pixel-aligned.
     """
-
-    if isZoomingWidth:
-        # --- Zoom by width ---
-        scale = canvasWidth / bgImg.shape[1]
-        newW = canvasWidth
-        newH = int(bgImg.shape[0] * scale)
-        bgScaled = cv2.resize(bgImg, (newW, newH), interpolation=cv2.INTER_LINEAR)
-
-        if newH > canvasHeight:
-            yStart = (newH - canvasHeight) // 2
-            bgCanvas = bgScaled[yStart:yStart+canvasHeight, :]
-        else:
-            # If we messed up and made the bgImg too small, pad it
-            padTop = (canvasHeight - newH) // 2
-            padBottom = canvasHeight - newH - padTop
-            bgCanvas = cv2.copyMakeBorder(bgScaled, padTop, padBottom, 0, 0,
-                                          cv2.BORDER_CONSTANT, value=(0,0,0))
-    else:
-        # --- Zoom by height ---
-        scale = canvasHeight / bgImg.shape[0]
-        newH = canvasHeight
-        newW = int(bgImg.shape[1] * scale)
-        bgScaled = cv2.resize(bgImg, (newW, newH), interpolation=cv2.INTER_LINEAR)
-
-        if newW > canvasWidth:
-            xStart = (newW - canvasWidth) // 2
-            bgCanvas = bgScaled[:, xStart:xStart+canvasWidth]
-        else:
-            # If we messed up and made the bgImg too small, pad it
-            padLeft = (canvasWidth - newW) // 2
-            padRight = canvasWidth - newW - padLeft
-            bgCanvas = cv2.copyMakeBorder(bgScaled, 0, 0, padLeft, padRight,
-                                          cv2.BORDER_CONSTANT, value=(0,0,0))
-
-    # --- Final crop to frame size (centered inside canvas) ---
+    bgCanvas = scaleBgToCanvas(bgImg, canvasWidth, canvasHeight, isZoomingWidth)
     xFrame = (canvasWidth - frameWidth) // 2
     yFrame = (canvasHeight - frameHeight) // 2
     return bgCanvas[yFrame:yFrame+frameHeight, xFrame:xFrame+frameWidth]
+
+# --- USB BACKGROUND SOURCE ---
+def findUsbBackgroundFolder():
+    """Search /media/ (up to 2 levels) for a mounted drive with a 'backgrounds' folder
+    that contains at least one image file. Handles physical yanking gracefully."""
+    if not USB_MOUNT_BASE.exists():
+        return None
+    try:
+        for entry in USB_MOUNT_BASE.iterdir():
+            # /media/<drive>/backgrounds
+            candidate = entry / "backgrounds"
+            if candidate.is_dir():
+                try:
+                    if any(f.suffix.lower() in BG_IMAGE_EXTENSIONS for f in candidate.iterdir() if f.is_file()):
+                        return candidate
+                except OSError:
+                    pass
+            # /media/<user>/<drive>/backgrounds
+            if entry.is_dir():
+                try:
+                    for subEntry in entry.iterdir():
+                        candidate = subEntry / "backgrounds"
+                        if candidate.is_dir():
+                            try:
+                                if any(f.suffix.lower() in BG_IMAGE_EXTENSIONS for f in candidate.iterdir() if f.is_file()):
+                                    return candidate
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return None
+
+def loadBackgrounds(folder):
+    """Return a sorted list of image file Paths from the given folder."""
+    try:
+        return sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in BG_IMAGE_EXTENSIONS)
+    except OSError:
+        return []
+
+def getBackgroundSource():
+    """Return (folder_path, is_usb). Prefers USB 'backgrounds' folder; falls back to local."""
+    usbFolder = findUsbBackgroundFolder()
+    if usbFolder is not None:
+        return usbFolder, True
+    return LOCAL_BG_FOLDER, False
 
 # --- BUTTON HANDLER ---
 lastPressTime = 0
@@ -277,9 +311,11 @@ def showStream(surface):
 def runPipeline():
     global picam2, button, pendingCapture, fileTransporter
     
-    # TODO: Will need to be modular for USB integration
-    backgroundFolderPath = PATH_TO_REPO / "backgroundImages"
-    backgrounds = [f for f in backgroundFolderPath.iterdir() if f.is_file()]
+    bgFolder, usingUsb = getBackgroundSource()
+    backgrounds = loadBackgrounds(bgFolder)
+    logMsg("INFO", f"Backgrounds loaded from {'USB' if usingUsb else 'local folder'}: {bgFolder} ({len(backgrounds)} images)")
+    if not backgrounds:
+        raise RuntimeError(f"No background images found in {bgFolder}")
     
     rotate180 = libcamera.Transform(hflip=True, vflip=True)
     try:
@@ -377,8 +413,6 @@ def runPipeline():
             if pendingCapture and (time.time() - captureStartTime >= 3):
                 if pictureCnt == 3:
                     pictureCnt = 0
-                if backgroundCnt == len(backgrounds):
-                    backgroundCnt = 0
                 # create greyscale image
                 grayCanvas = cv2.cvtColor(padded, cv2.COLOR_BGR2GRAY)
                 # handle image path creation and save to path
@@ -400,7 +434,22 @@ def runPipeline():
                         raise RuntimeError("Follower Pi not found. Check Ethernet cable/connection")
                 pictureCnt += 1
                 
+                # Check if USB was inserted or removed since last capture
+                newBgFolder, newUsingUsb = getBackgroundSource()
+                if newBgFolder != bgFolder:
+                    newBackgrounds = loadBackgrounds(newBgFolder)
+                    if newBackgrounds:
+                        bgFolder = newBgFolder
+                        usingUsb = newUsingUsb
+                        backgrounds = newBackgrounds
+                        backgroundCnt = 0
+                        logMsg("INFO", f"Background source switched to {'USB' if usingUsb else 'local folder'}: {bgFolder}")
+                    else:
+                        logMsg("WARNING", f"New background source {newBgFolder} is empty, keeping current")
+
                 # update the background image
+                if backgroundCnt >= len(backgrounds):
+                    backgroundCnt = 0
                 bgImgOriginal = cv2.imread(str(backgrounds[backgroundCnt]))
                 backgroundCnt += 1
                 
