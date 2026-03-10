@@ -157,79 +157,63 @@ def matchFrameColorChannelsToTarget(img, targetChannels=3):
 
     return img
 
+def scaleBgToCanvas(bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT, isZoomingWidth=True):
+    """
+    Scale background to exactly (canvasWidth x canvasHeight) using zoom-and-crop. 
+    This is the single source of truth for background scaling so
+    that the frame region and the canvas padding always match.
+    """
+    if isZoomingWidth:
+        scale = canvasWidth / bgImg.shape[1]
+        newW = canvasWidth
+        newH = int(bgImg.shape[0] * scale)
+        bgScaled = cv2.resize(bgImg, (newW, newH), interpolation=cv2.INTER_LINEAR)
+        if newH >= canvasHeight:
+            yStart = (newH - canvasHeight) // 2
+            return bgScaled[yStart:yStart+canvasHeight, :]
+        else:
+            padTop = (canvasHeight - newH) // 2
+            padBottom = canvasHeight - newH - padTop
+            return cv2.copyMakeBorder(bgScaled, padTop, padBottom, 0, 0,
+                                      cv2.BORDER_CONSTANT, value=(0,0,0))
+    else:
+        scale = canvasHeight / bgImg.shape[0]
+        newH = canvasHeight
+        newW = int(bgImg.shape[1] * scale)
+        bgScaled = cv2.resize(bgImg, (newW, newH), interpolation=cv2.INTER_LINEAR)
+        if newW >= canvasWidth:
+            xStart = (newW - canvasWidth) // 2
+            return bgScaled[:, xStart:xStart+canvasWidth]
+        else:
+            padLeft = (canvasWidth - newW) // 2
+            padRight = canvasWidth - newW - padLeft
+            return cv2.copyMakeBorder(bgScaled, 0, 0, padLeft, padRight,
+                                      cv2.BORDER_CONSTANT, value=(0,0,0))
+
 def centerFrameInCanvas(frame, bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT):
     """
     Places `frame` centered inside a fixed-size canvas.
-    Side padding is filled with the background image
-    
-    frame: the composite (cropped subject)
-    bgImg: the original background image (will be resized to canvas size)
+    Side padding is filled with the background image scaled the same way as the
+    frame region, so the two always blend seamlessly regardless of source image size.
     """
     h, w = frame.shape[:2]
-    # Resize background to match canvas
-    bgResized = cv2.resize(bgImg, (canvasWidth, canvasHeight), interpolation=cv2.INTER_AREA)
-
-    # Start with the background as the canvas
-    canvas = bgResized.copy()
-
-    # Compute offsets for centering the frame
+    canvas = scaleBgToCanvas(bgImg, canvasWidth, canvasHeight).copy()
     xOffset = (canvasWidth - w) // 2
     yOffset = (canvasHeight - h) // 2
-
     if xOffset < 0 or yOffset < 0:
         raise ValueError("Frame larger than canvas — increase canvas size")
-
-    # Place the frame into the center of the canvas
     canvas[yOffset:yOffset+h, xOffset:xOffset+w] = frame
-
     return canvas
 
 def fitAndCropBackground(bgImg, frameWidth=FRAME_WIDTH, frameHeight=FRAME_HEIGHT,
                          canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT,
                          isZoomingWidth=True):
     """
-    Scale the background image to cover the canvas either by width or height,
-    then crop/pad to canvas size, and finally cut out a region the same
-    size as the frame.
-
-    - If isZoomingWidth=True: scale so width matches canvasWidth.
-    - If isZoomingWidth=False: scale so height matches canvasHeight.
+    Scale background to canvas size (via scaleBgToCanvas), then crop the center
+    region matching the frame. Uses the same scaling as centerFrameInCanvas so the
+    frame and canvas padding are always pixel-aligned.
     """
-
-    if isZoomingWidth:
-        # --- Zoom by width ---
-        scale = canvasWidth / bgImg.shape[1]
-        newW = canvasWidth
-        newH = int(bgImg.shape[0] * scale)
-        bgScaled = cv2.resize(bgImg, (newW, newH), interpolation=cv2.INTER_LINEAR)
-
-        if newH > canvasHeight:
-            yStart = (newH - canvasHeight) // 2
-            bgCanvas = bgScaled[yStart:yStart+canvasHeight, :]
-        else:
-            # If we messed up and made the bgImg too small, pad it
-            padTop = (canvasHeight - newH) // 2
-            padBottom = canvasHeight - newH - padTop
-            bgCanvas = cv2.copyMakeBorder(bgScaled, padTop, padBottom, 0, 0,
-                                          cv2.BORDER_CONSTANT, value=(0,0,0))
-    else:
-        # --- Zoom by height ---
-        scale = canvasHeight / bgImg.shape[0]
-        newH = canvasHeight
-        newW = int(bgImg.shape[1] * scale)
-        bgScaled = cv2.resize(bgImg, (newW, newH), interpolation=cv2.INTER_LINEAR)
-
-        if newW > canvasWidth:
-            xStart = (newW - canvasWidth) // 2
-            bgCanvas = bgScaled[:, xStart:xStart+canvasWidth]
-        else:
-            # If we messed up and made the bgImg too small, pad it
-            padLeft = (canvasWidth - newW) // 2
-            padRight = canvasWidth - newW - padLeft
-            bgCanvas = cv2.copyMakeBorder(bgScaled, 0, 0, padLeft, padRight,
-                                          cv2.BORDER_CONSTANT, value=(0,0,0))
-
-    # --- Final crop to frame size (centered inside canvas) ---
+    bgCanvas = scaleBgToCanvas(bgImg, canvasWidth, canvasHeight, isZoomingWidth)
     xFrame = (canvasWidth - frameWidth) // 2
     yFrame = (canvasHeight - frameHeight) // 2
     return bgCanvas[yFrame:yFrame+frameHeight, xFrame:xFrame+frameWidth]
