@@ -28,6 +28,9 @@ FRAME_HEIGHT_RATIO = 1080 / 1080
 
 PATH_TO_REPO = Path.home() / "cmosc-victorian"
 BACKUP_BG_IMG_PATH = PATH_TO_REPO / "backgroundImages/backdrop01.jpg"
+LOCAL_BG_FOLDER = PATH_TO_REPO / "backgroundImages"
+USB_MOUNT_BASE = Path("/media")
+BG_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 MAX_CONSECUTIVE_ERRORS = 5
 WATCHDOG_DELAY = 3  # seconds before restart if unrecoverable
 BUTTON_PIN = 17  # GPIO pin for button
@@ -231,6 +234,53 @@ def fitAndCropBackground(bgImg, frameWidth=FRAME_WIDTH, frameHeight=FRAME_HEIGHT
     yFrame = (canvasHeight - frameHeight) // 2
     return bgCanvas[yFrame:yFrame+frameHeight, xFrame:xFrame+frameWidth]
 
+# --- USB BACKGROUND SOURCE ---
+def findUsbBackgroundFolder():
+    """Search /media/ (up to 2 levels) for a mounted drive with a 'backgrounds' folder
+    that contains at least one image file. Handles physical yanking gracefully."""
+    if not USB_MOUNT_BASE.exists():
+        return None
+    try:
+        for entry in USB_MOUNT_BASE.iterdir():
+            # /media/<drive>/backgrounds
+            candidate = entry / "backgrounds"
+            if candidate.is_dir():
+                try:
+                    if any(f.suffix.lower() in BG_IMAGE_EXTENSIONS for f in candidate.iterdir() if f.is_file()):
+                        return candidate
+                except OSError:
+                    pass
+            # /media/<user>/<drive>/backgrounds
+            if entry.is_dir():
+                try:
+                    for subEntry in entry.iterdir():
+                        candidate = subEntry / "backgrounds"
+                        if candidate.is_dir():
+                            try:
+                                if any(f.suffix.lower() in BG_IMAGE_EXTENSIONS for f in candidate.iterdir() if f.is_file()):
+                                    return candidate
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return None
+
+def loadBackgrounds(folder):
+    """Return a sorted list of image file Paths from the given folder."""
+    try:
+        return sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in BG_IMAGE_EXTENSIONS)
+    except OSError:
+        return []
+
+def getBackgroundSource():
+    """Return (folder_path, is_usb). Prefers USB 'backgrounds' folder; falls back to local."""
+    usbFolder = findUsbBackgroundFolder()
+    if usbFolder is not None:
+        return usbFolder, True
+    return LOCAL_BG_FOLDER, False
+
 # --- BUTTON HANDLER ---
 lastPressTime = 0
 
@@ -277,9 +327,11 @@ def showStream(surface):
 def runPipeline():
     global picam2, button, pendingCapture, fileTransporter
     
-    # TODO: Will need to be modular for USB integration
-    backgroundFolderPath = PATH_TO_REPO / "backgroundImages"
-    backgrounds = [f for f in backgroundFolderPath.iterdir() if f.is_file()]
+    bgFolder, usingUsb = getBackgroundSource()
+    backgrounds = loadBackgrounds(bgFolder)
+    logMsg("INFO", f"Backgrounds loaded from {'USB' if usingUsb else 'local folder'}: {bgFolder} ({len(backgrounds)} images)")
+    if not backgrounds:
+        raise RuntimeError(f"No background images found in {bgFolder}")
     
     rotate180 = libcamera.Transform(hflip=True, vflip=True)
     try:
@@ -377,8 +429,6 @@ def runPipeline():
             if pendingCapture and (time.time() - captureStartTime >= 3):
                 if pictureCnt == 3:
                     pictureCnt = 0
-                if backgroundCnt == len(backgrounds):
-                    backgroundCnt = 0
                 # create greyscale image
                 grayCanvas = cv2.cvtColor(padded, cv2.COLOR_BGR2GRAY)
                 # handle image path creation and save to path
@@ -400,7 +450,22 @@ def runPipeline():
                         raise RuntimeError("Follower Pi not found. Check Ethernet cable/connection")
                 pictureCnt += 1
                 
+                # Check if USB was inserted or removed since last capture
+                newBgFolder, newUsingUsb = getBackgroundSource()
+                if newBgFolder != bgFolder:
+                    newBackgrounds = loadBackgrounds(newBgFolder)
+                    if newBackgrounds:
+                        bgFolder = newBgFolder
+                        usingUsb = newUsingUsb
+                        backgrounds = newBackgrounds
+                        backgroundCnt = 0
+                        logMsg("INFO", f"Background source switched to {'USB' if usingUsb else 'local folder'}: {bgFolder}")
+                    else:
+                        logMsg("WARNING", f"New background source {newBgFolder} is empty, keeping current")
+
                 # update the background image
+                if backgroundCnt >= len(backgrounds):
+                    backgroundCnt = 0
                 bgImgOriginal = cv2.imread(str(backgrounds[backgroundCnt]))
                 backgroundCnt += 1
                 
