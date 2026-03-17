@@ -335,7 +335,7 @@ def runPipeline():
         # Crop from top down (higher value = more cropped from the top)
         cropY = 0
         # HSV thresholds for green screen
-        hLow, sLow, vLow = 40,50,50
+        hLow, sLow, vLow = 38,50,75
         hHigh, sHigh, vHigh = 85, 255, 255
 
         errCnt = 0
