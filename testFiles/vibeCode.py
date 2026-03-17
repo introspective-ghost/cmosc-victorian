@@ -12,12 +12,12 @@ FRAME_WIDTH = 1080
 FRAME_HEIGHT = 1920
 CROP_W = 868
 CROP_H = 1169
-BG_IMAGE_PATH = "backgroundImages/backdrop01.jpg"
+BG_IMAGE_PATH = "../backgroundImages/backdrop01.jpg"
 MAX_CONSECUTIVE_ERRORS = 5
 WATCHDOG_DELAY = 3  # seconds before restart if unrecoverable
 
 # --- Logging ---
-LOG_FILE = f"logs/greenscreen_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+LOG_FILE = f"../logs/greenscreen_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 def log_msg(level, msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{timestamp}] [{level}] {msg}"

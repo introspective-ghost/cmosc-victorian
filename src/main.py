@@ -330,13 +330,13 @@ def runPipeline():
         button = ButtonHandler(BUTTON_PIN, onButtonPress)
         # victorian1 has a static IPv4 address
         fileTransporter = LocalNetworkPicTransfer("victorian1.local", "cmosc")
-        # 0-212
-        cropX = 212
-        # 0-751
+        # Crop the image captured on the left bound 
+        cropX = 325
+        # Crop from top down (higher value = more cropped from the top)
         cropY = 0
         # HSV thresholds for green screen
-        hLow, sLow, vLow = 35, 40, 40
-        hHigh, sHigh, vHigh = 95, 255, 255
+        hLow, sLow, vLow = 40,50,50
+        hHigh, sHigh, vHigh = 85, 255, 255
 
         errCnt = 0
         pictureCnt = 0
@@ -422,7 +422,12 @@ def runPipeline():
                 
                 cv2.imwrite(str(folderPath / fileName), grayCanvas)
                 logMsg("INFO", f"Saved delayed capture: {fileName}")
-                # pic0 is displayed on monitor1
+		
+		# display image on screen for 3 seconds
+                showImg(folderPath / fileName, monitor0, 0)
+                time.sleep(3)                
+		
+		# pic0 is displayed on monitor1
                 if pictureCnt == 0:
                     showImg(folderPath / fileName, monitor1, CANVAS_WIDTH)
                 # pic1 and pic2 get sent to follower rpi
@@ -452,10 +457,6 @@ def runPipeline():
                     backgroundCnt = 0
                 bgImgOriginal = cv2.imread(str(backgrounds[backgroundCnt]))
                 backgroundCnt += 1
-                
-                # display image on screen for 3 seconds
-                showImg(folderPath / fileName, monitor0, 0)
-                time.sleep(3)
                 
                 pendingCapture = False  # reset
 
