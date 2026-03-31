@@ -316,11 +316,12 @@ def runPipeline():
     logMsg("INFO", f"Backgrounds loaded from {'USB' if usingUsb else 'local folder'}: {bgFolder} ({len(backgrounds)} images)")
     if not backgrounds:
         raise RuntimeError(f"No background images found in {bgFolder}")
-    
+    cropX = 0
+    cropY = 0
     rotate180 = libcamera.Transform(hflip=True, vflip=True)
     try:
         picam2 = Picamera2()
-        config = picam2.create_preview_configuration(main={"size": (CANVAS_WIDTH, CANVAS_HEIGHT)},transform=rotate180)
+        config = picam2.create_preview_configuration(main={"size": (2304,1296)},transform=rotate180)
         picam2.configure(config)
         picam2.start()
         
@@ -331,9 +332,8 @@ def runPipeline():
         # victorian1 has a static IPv4 address
         fileTransporter = LocalNetworkPicTransfer("victorian1.local", "cmosc")
         # Crop the image captured on the left bound 
-        cropX = 325
+       
         # Crop from top down (higher value = more cropped from the top)
-        cropY = 0
         # HSV thresholds for green screen
         hLow, sLow, vLow = 38,50,75
         hHigh, sHigh, vHigh = 85, 255, 255
@@ -369,10 +369,9 @@ def runPipeline():
             if cropX + FRAME_WIDTH > CANVAS_WIDTH or cropY + FRAME_HEIGHT > CANVAS_HEIGHT:
                 raise ValueError(f"Crop out of bounds: X={cropX}, Y={cropY}")
 
-            cropped = frame[cropY:cropY + FRAME_HEIGHT, cropX:cropX + FRAME_WIDTH]
+            cropped = frame #[cropY:cropY + FRAME_HEIGHT, cropX:cropX + FRAME_WIDTH]
             if cropped.size == 0:
                 raise ValueError("ERROR", "Cropped frame empty")
-
             # Zoom horizontally
             greenScreenImg = fitAndCropBackground(bgImgOriginal, FRAME_WIDTH, FRAME_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT, True)
             
