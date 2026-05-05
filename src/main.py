@@ -34,30 +34,48 @@ BG_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 MAX_CONSECUTIVE_ERRORS = 5
 WATCHDOG_DELAY = 3  # seconds before restart if unrecoverable
 BUTTON_PIN = 17  # GPIO pin for button
+CANVAS_WIDTH = 0
+CANVAS_HEIGHT = 0
+FRAME_WIDTH = 0
+FRAME_HEIGHT = 0
 
 canvas = None
 button = None
 fileTransporter = None
+monitor0 = None
+monitor1 = None
+screen = None
 pendingCapture = False
 debounceActive = False
+debugFlag = False
 
-# Setup monitors
-_monitors = sorted(get_monitors(), key=lambda m: m.x)
-monitor0 = {"width": _monitors[0].width, "height": _monitors[0].height, "x": _monitors[0].x, "y": _monitors[0].y}
-monitor1 = {"width": _monitors[1].width, "height": _monitors[1].height, "x": _monitors[1].x, "y": _monitors[1].y}
-print(_monitors)
-CANVAS_WIDTH  = monitor0["width"]
-CANVAS_HEIGHT = monitor0["height"]
-FRAME_WIDTH   = int(CANVAS_WIDTH  * FRAME_WIDTH_RATIO)
-FRAME_HEIGHT  = int(CANVAS_HEIGHT * FRAME_HEIGHT_RATIO)
+# --- CONFIGURE DISPLAY --- 
+def displaySetup():
+    global monitor0, monitor1, CANVAS_WIDTH, CANVAS_HEIGHT, FRAME_WIDTH, FRAME_HEIGHT, screen
+    # Setup monitors
+    _monitors = sorted(get_monitors(), key=lambda m: m.x)
+    monitor0 = {"width": _monitors[0].width, "height": _monitors[0].height, "x": _monitors[0].x, "y": _monitors[0].y}
+    if not debugFlag:
+        monitor1 = {"width": _monitors[1].width, "height": _monitors[1].height, "x": _monitors[1].x, "y": _monitors[1].y}
+    print(_monitors)
+    CANVAS_WIDTH  = monitor0["width"]
+    CANVAS_HEIGHT = monitor0["height"]
+    FRAME_WIDTH   = int(CANVAS_WIDTH  * FRAME_WIDTH_RATIO)
+    FRAME_HEIGHT  = int(CANVAS_HEIGHT * FRAME_HEIGHT_RATIO)
 
-# Total desktop size (side-by-side layout assumed)
-total_width = monitor0["width"] + monitor1["width"]
-total_height = max(monitor0["height"], monitor1["height"])
+    # Total desktop size (side-by-side layout assumed)
+    total_width = 0
+    total_height = 0
+    if debugFlag:
+        total_width = monitor0["width"]
+        total_height = monitor0["height"]
+    else:
+        total_width = monitor0["width"] + monitor1["width"]
+        total_height = max(monitor0["height"], monitor1["height"])
 
-# Initialize pygame
-pygame.init()
-screen = pygame.display.set_mode((total_width, total_height), pygame.NOFRAME)
+    # Initialize pygame
+    pygame.init()
+    screen = pygame.display.set_mode((total_width, total_height), pygame.NOFRAME)
 
 # --- LOGGING ---
 logDir = PATH_TO_REPO / "logs"
@@ -320,7 +338,8 @@ def runPipeline():
     rotate180 = libcamera.Transform(hflip=True, vflip=True)
     try:
         picam2 = Picamera2()
-        config = picam2.create_preview_configuration(main={"size": (CANVAS_WIDTH, CANVAS_HEIGHT)},transform=rotate180)
+        config = picam2.create_preview_configuration(main={"size": (CANVAS_WIDTH, CANVAS_HEIGHT), "format": "RGB888"},raw={"size": picam2.sensor_resolution},transform=rotate180)
+        picam2.align_configuration(config)
         picam2.configure(config)
         picam2.start()
         
@@ -331,7 +350,7 @@ def runPipeline():
         # victorian1 has a static IPv4 address
         fileTransporter = LocalNetworkPicTransfer("victorian1.local", "cmosc")
         # Crop the image captured on the left bound 
-        cropX = 325
+        cropX = 0
         # Crop from top down (higher value = more cropped from the top)
         cropY = 0
         # HSV thresholds for green screen
@@ -346,8 +365,9 @@ def runPipeline():
 
         # Show last captured pic0 on monitor1 at startup if it exists
         pic0Path = PATH_TO_REPO / "pics/pic0.jpg"
-        if pic0Path.exists():
-            showImg(pic0Path, monitor1, CANVAS_WIDTH)
+        if not debugFlag:
+            if pic0Path.exists():
+                showImg(pic0Path, monitor1, CANVAS_WIDTH)
 
         while True:                    
             try:
@@ -423,20 +443,22 @@ def runPipeline():
                 cv2.imwrite(str(folderPath / fileName), grayCanvas)
                 logMsg("INFO", f"Saved delayed capture: {fileName}")
 		
-		# display image on screen for 3 seconds
+                # display image on screen for 3 seconds
                 showImg(folderPath / fileName, monitor0, 0)
                 time.sleep(3)                
 		
-		# pic0 is displayed on monitor1
-                if pictureCnt == 0:
-                    showImg(folderPath / fileName, monitor1, CANVAS_WIDTH)
+                # pic0 is displayed on monitor1
+                if not debugFlag:
+                    if pictureCnt == 0:
+                        showImg(folderPath / fileName, monitor1, CANVAS_WIDTH)
                 # pic1 and pic2 get sent to follower rpi
                 if pictureCnt == 1 or pictureCnt == 2:
-                    try:
-                        fileTransporter.sendFile(str(folderPath / fileName), f"~/pics/{fileName}")
-                    except Exception as e:
-                        logMsg("ERROR", f"rsync file transfer failed: {e}")
-                        raise RuntimeError("Follower Pi not found. Check Ethernet cable/connection")
+                    if not debugFlag:
+                        try:
+                            fileTransporter.sendFile(str(folderPath / fileName), f"~/pics/{fileName}")
+                        except Exception as e:
+                            logMsg("ERROR", f"rsync file transfer failed: {e}")
+                            raise RuntimeError("Follower Pi not found. Check Ethernet cable/connection")
                 pictureCnt += 1
                 
                 # Check if USB was inserted or removed since last capture
@@ -468,6 +490,13 @@ def runPipeline():
         cleanupAndExit()
 
 if __name__ == "__main__":
+    # Check if user passed debug argument in command line
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "debug":
+            debugFlag = True
+            
+    displaySetup()
+            
     startupChecks()
     # Watchdog loop
     while True:
