@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Unclutter
+Exec=bash -c "unclutter -idle 5 -root &"
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+

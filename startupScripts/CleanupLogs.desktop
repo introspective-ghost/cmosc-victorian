@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Cleanup logs
+Exec=bash -c "$HOME/cmosc-victorian/startupScripts/cleanupLogs.sh &"
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
