@@ -57,7 +57,7 @@ total_height = max(CANVAS_HEIGHT, monitor1["height"])
 
 # Initialize pygame
 pygame.init()
-screen = pygame.display.set_mode((total_width, total_height), pygame.RESIZABLE)
+screen = pygame.display.set_mode((total_width, total_height), pygame.NOFRAME)
 
 # --- LOGGING ---
 logDir = PATH_TO_REPO / "logs"
@@ -131,31 +131,6 @@ signal.signal(signal.SIGINT, cleanupAndExit)   # Ctrl+C
 signal.signal(signal.SIGTERM, cleanupAndExit)  # kill
 
 # --- IMAGE HELPERS ---
-def matchFrameColorChannelsToTarget(img, targetChannels=3):
-    """
-    Ensures consistent channel count and order for compositing.
-    Converts to BGR with no alpha unless target_channels=4 requested.
-    """
-    if img is None:
-        return None
-    
-    # If grayscale → promote to BGR
-    if len(img.shape) == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    
-    # Handle alpha channels explicitly
-    if img.shape[2] == 4:
-        if targetChannels == 3:
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-        else:
-            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)
-
-    # If it came in as RGB instead of BGR (from another lib)
-    # Detect using heuristics or enforce conversion if known source is RGB
-    if targetChannels == 3 and img.shape[2] == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-    return img
 
 def scaleBgToCanvas(bgImg, canvasWidth=CANVAS_WIDTH, canvasHeight=CANVAS_HEIGHT, isZoomingWidth=True):
     """
@@ -318,17 +293,17 @@ def runPipeline():
     if not backgrounds:
         logMsg("ERROR", f"No background images found in {bgFolder}")
         raise RuntimeError()
-    cropX = 0
-    cropY = 0
+    
     rotate180 = libcamera.Transform(hflip=True, vflip=True)
     try:
         picam2 = Picamera2()
-        config = picam2.create_preview_configuration(sensor={"output_size": [2304,1296], "bit_depth": 10},main={"size": [CANVAS_WIDTH,CANVAS_HEIGHT],"format":"BGR888"},buffer_count=6, transform=rotate180)
+        config = picam2.create_preview_configuration(sensor={"output_size": [2304,1296], "bit_depth": 10},main={"size": [CANVAS_WIDTH,CANVAS_HEIGHT],"format":"RGB888"},buffer_count=6, transform=rotate180)
         picam2.configure(config)
-        offset = [1000,1000]#[int((2304/2) - (FRAME_WIDTH/2)),int((1296/2) - (FRAME_HEIGHT/2))]
-        picam2.set_controls({"ScalerCrop": offset + [2304,1296]})
-        picam2.start()
+        # Scaler Crop uses offset and resolution based on the camera's max resolution which is why the height/width in set controls can be greater than the height in output size
+        offset = [775,600]
+        picam2.set_controls({"ScalerCrop": offset + [2304,1400]})
         
+        picam2.start()
         time.sleep(0.5)
         logMsg("INFO", "Camera started successfully")
         
@@ -359,27 +334,17 @@ def runPipeline():
             # flip image over y-axis
             frame = cv2.flip(frame, 1)
             
-#             if cropX + FRAME_WIDTH > CANVAS_WIDTH or cropY + FRAME_HEIGHT > CANVAS_HEIGHT:
-#                 raise ValueError(f"Crop out of bounds: X={cropX}, Y={cropY}")
-
-# 			# THIS IS DOING THE FRAME CROPPING OF THE CAMERA IMAGE
-            cropped = frame[cropY:cropY + FRAME_HEIGHT, cropX:cropX + FRAME_WIDTH]
-            #if cropped.size == 0:
-#                 raise ValueError("ERROR", "Cropped frame empty")
-            
-            # Zoom horizontally
+ 			# THIS IS CROPPING THE FRAME HOLDING THE IMAGE
+            cropped = frame[:FRAME_HEIGHT, :FRAME_WIDTH]
+           
+            # Zoom horizontally to expand greenscreen image to cover whole canvas, not just frame
             greenScreenImg = fitAndCropGreenscreenBackground(bgImgOriginal, FRAME_WIDTH, FRAME_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT, True)
             
-            # fix color channels if needed
-            greenScreenImg  = matchFrameColorChannelsToTarget(greenScreenImg, cropped.shape[2])
-            cropped = matchFrameColorChannelsToTarget(cropped, greenScreenImg.shape[2])
-            
             # Create greenscreen mask
-            hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
+            hsv = cv2.cvtColor(cropped, cv2.COLOR_RGB2HSV)
             mask = cv2.inRange(hsv, np.array([hLow, sLow, vLow]), np.array([hHigh, sHigh, vHigh]))
             kernel = np.ones((3,3), np.uint8)
             mask = cv2.morphologyEx(mask,cv2.MORPH_OPEN, kernel) # remove small noise
-            mask = cv2.morphologyEx(mask,cv2.MORPH_CLOSE, kernel) # close small holes
             
             # Resize mask to match cropped frame
             if cropped.shape[:2] != mask.shape[:2]:
@@ -417,11 +382,11 @@ def runPipeline():
                 cv2.imwrite(str(folderPath / fileName), grayCanvas)
                 logMsg("INFO", f"Saved delayed capture: {fileName}")
         
-        # display image on screen for 3 seconds
+                # display image on screen for 3 seconds
                 showImg(folderPath / fileName, monitor0, 0)
                 time.sleep(3)                
         
-        # pic0 is displayed on monitor1
+                # pic0 is displayed on monitor1
                 if pictureCnt == 0:
                     showImg(folderPath / fileName, monitor1, CANVAS_WIDTH)
                 # pic1 and pic2 get sent to follower rpi
@@ -463,15 +428,5 @@ def runPipeline():
 
 if __name__ == "__main__":
     startupChecks()
-    # Watchdog loop
-    while True:
-        try:
-            runPipeline()
-            break  # exit if run_pipeline completes without watchdog trigger
-        except RuntimeError as e:
-            logMsg("WARNING", f"Watchdog caught runtime error: {e}, restarting in {WATCHDOG_DELAY}s")
-            time.sleep(WATCHDOG_DELAY)
-            continue
-        except Exception as e:
-            logMsg("ERROR", f"Watchdog caught Fatal error: {e}, Exiting...")
-            break
+    runPipeline()
+
